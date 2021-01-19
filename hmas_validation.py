@@ -233,14 +233,18 @@ def main():
 
 
     final = pd.merge(full, b, on = ["seq", "primer"], how = "left")
-    mismatches = final[final.isnull().any(axis=1)]
+    nomatch = final[final.isnull().any(axis=1)]
     hits = pd.merge(full, b, on = ["seq", "primer"], how = "inner")
 
     logger.info("[OUT] There are {len(hits.index)} sequences with a blast hit to the primer from the design file.")
     logger.info("[OUT] Of these, {hits[hits.mismatch < 2].shape[0]} have 0 or 1 mismatches.")
     #logger.info("[OUT] {} high quality sequences did") 
 
-
+    hits.to_csv(args.outfile + '_perfect_matches.txt', sep='\t', index = False, float_format = "%.2E")
+    nomatch.to_csv(outfile + 'no_matches.txt', columns = ['seq','nseqs','primer'], sep='\t', index = False)
+    logger.info("[OUT] The perfect matches can be found here: {args.outfile}_perfect_matches.txt ")
+    logger.info("[OUT] The sequences with no blast hit can be found here: {args.outfile}_no_matches.txt ")    
+    
 
     s = pd.merge(mismatches, b, on = "seq", how = "left")
     s2 = s[["seq", "primer_x", "primer_y"]]
