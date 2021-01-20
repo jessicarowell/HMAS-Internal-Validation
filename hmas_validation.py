@@ -135,21 +135,21 @@ def run_blast(db, fasta, outfile, blastn, maxhits = 10):
     # Log errors currently printed to stdout
 
 def create_connection(db_file):
-    if Path(db_file).is_file():
-        db_init = db_file + '_sqlDB'
-    else:
-        db_init = db_file
+    #if Path(db_file).is_file():
+    #    db_init = db_file + '_sqlDB'
+    #else:
+    #    db_init = db_file
 
     conn = None
     try:
-        conn = sqlite3.connect(db_init)
+        conn = sqlite3.connect(db_file)
         print(sqlite3.version)
     except Error as e:
         print(e)
     finally:
         if conn:
             conn.close()
-        return(db_init)
+        return(db_file)
 
 def get_data(filepath, sep, colnames):
         return(pd.read_csv(filepath, sep = sep, names = colnames))
@@ -185,10 +185,9 @@ def main():
     print(f"All files exist. All commands are executable.")
 
     db = make_blast_db(reference_fasta, 'nucl', path_to_makeblastdb)
-    maxhits = 10
-    blast_file = run_blast(db, query_fasta, args.outfile, path_to_blastn, maxhits)
+    blast_file = run_blast(db, query_fasta, args.outfile, path_to_blastn, 20)
 
-    db_init = create_connection(args.outfile)
+    db_init = create_connection(args.outfile + '.db')
 
     # Actions on name file (get unique sequences and num of consensus seqs)
     ncolnames = ["seq", "consensusSeqs"]
@@ -202,7 +201,7 @@ def main():
     #logger.info(f"""[OUT] The max is {n.nseqs.max()}, the median is {n.nseqs.median()}, 
     #           and the mean is {n.nseqs.mean()} (stdev {n.nseqs.std()})""")
 
-    logger.info(f"[OUT] Summary statistics on the number of identical sequences per consensus sequence: \n {n.nseqs.describe()}")
+    #logger.info(f"[OUT] Summary statistics on the number of identical sequences per consensus sequence: \n {n.nseqs.describe()}")
     # Make a plot showing distribution of num_consensus_sequences
 
     # Actions on group file (get primers for all unique sequences)
@@ -227,7 +226,8 @@ def main():
     bcolnames = ["seq", "primer", "query_len", "subj_len", "eval", "mismatch"]
     b = get_data(blast_file, '\t', bcolnames)
     
-    logger.info("[OUT] Blastn run with max target number of sequences set to {maxhits}.")
+    # Want to add max num hits to the log file but it's initialized inside function
+    #logger.info("[OUT] Blastn run with max target number of sequences set to {maxhits}.")
     logger.info("[OUT] {len(b.index)} total Blast hits against the high-quality, unique sequences")
     logger.info("[OUT] {b[b.mismatch < 2].shape[0]} total Blast hits with 0 or 1 mismatches.") 
 
@@ -238,18 +238,33 @@ def main():
 
     logger.info("[OUT] There are {len(hits.index)} sequences with a blast hit to the primer from the design file.")
     logger.info("[OUT] Of these, {hits[hits.mismatch < 2].shape[0]} have 0 or 1 mismatches.")
-    #logger.info("[OUT] {} high quality sequences did") 
 
     hits.to_csv(args.outfile + '_perfect_matches.txt', sep='\t', index = False, float_format = "%.2E")
-    nomatch.to_csv(outfile + 'no_matches.txt', columns = ['seq','nseqs','primer'], sep='\t', index = False)
+    nomatch.to_csv(args.outfile + '_no_perfect_matches.txt', columns = ['seq','nseqs','primer'], sep='\t', index = False)
     logger.info("[OUT] The perfect matches can be found here: {args.outfile}_perfect_matches.txt ")
-    logger.info("[OUT] The sequences with no blast hit can be found here: {args.outfile}_no_matches.txt ")    
+    logger.info("[OUT] The sequences without a perfect match can be found here: {args.outfile}_no_perfect_matches.txt ")    
+    # Wording of the file name ("no matches") is confusing
+    m = b.seq.isin(hits.seq)
+    m2 = b.loc[m]
+    m3 = b.loc[~m]
+    m2.to_csv(args.outfile + '_all_matches.txt', sep='\t', index = False, float_format = "%.2E")
+    m3.to_csv(args.outfile + '_mismatches.txt', sep='\t', index = False, float_format = "%.2E")
+
+    logger.info("[OUT] The final reads that matched perfectly to their intended primers also matched to other primers in the design file")
+    logger.info("[OUT] A list of all such matches can be found here: {args.outfile}_all_matches.txt}")
+    logger.info("[OUT] Some reads that did not match their intended primers did match other primers.")
+    logger.info("[OUT] A list of those can be found here: {args.outfile}_mismatches.txt}")
+
+    n = pd.merge(full, b, on = ["seq"], how = "left")
+    n2 = n[n.isnull().any(axis=1)]
     
-
-    s = pd.merge(mismatches, b, on = "seq", how = "left")
-    s2 = s[["seq", "primer_x", "primer_y"]]
-    s3 = s2[s2.primer_y.notna()]
-
+    n2 = n[n.isnull().any(axis=1)].drop(labels = ['primer_y','query_len','subj_len','eval','mismatch'], \
+           axis = 1).rename(columns ={'primer_x':'primer'})
+    n2.to_csv(args.outfile + '_orphans.txt', columns = ['seq','nseqs','primer'], sep='\t', index = False)
+    logger.info("[OUT] Some reads did not hit any of the amplicons in the design file.")
+    logger.info("[OUT] A list of those can be found here: {args.outfile}_orphans.txt}")
+    
+    
 
     print(f"Validation completed.  Please see output and log files for details.")
 
