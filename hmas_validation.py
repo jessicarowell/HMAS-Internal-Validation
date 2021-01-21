@@ -75,8 +75,8 @@ def make_blast_db(reference, dbtype, makeblastdb):
     ------
 
     """
-    db_prefix = os.path.splitext(reference)[0]
-    db_name = db_prefix + "_db"
+    # Would like to add db_prefix = args.outfile so that it's easy to clean up files
+    db_name = os.path.splitext(reference)[0]
 
     p = subprocess.run([makeblastdb, '-in', reference, '-out', db_name, '-dbtype', dbtype])
 
@@ -86,9 +86,6 @@ def make_blast_db(reference, dbtype, makeblastdb):
     else:
         print("makeblastdb run successfully.")
         return(db_name)
-
-    # Put the date/time in log name
-    # Log the errors currently printed to sdout
 
 
 def run_blast(db, fasta, outfile, blastn, maxhits = 10):
@@ -120,6 +117,7 @@ def run_blast(db, fasta, outfile, blastn, maxhits = 10):
         finally:
             maxhits = maxhits
 
+    print(f"Running blast with {maxhits} maximum hits to generate")
     p = subprocess.run([blastn, '-db', db, '-query', fasta, \
                                 '-outfmt', '6 qseqid sseqid qlen slen evalue ndent mismatch', \
                                 '-max_target_seqs', str(maxhits), '-out', blast_out])
