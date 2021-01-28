@@ -118,16 +118,18 @@ def run_blast(db, fasta, outfile, blastn, maxhits = 10):
             maxhits = maxhits
 
     print(f"Running blast with {maxhits} maximum hits to generate")
-    p = subprocess.run([blastn, '-db', db, '-query', fasta, \
-                                '-outfmt', '6 qseqid sseqid qlen slen evalue ndent mismatch', \
-                                '-max_target_seqs', str(maxhits), '-out', blast_out])
+    p = subprocess.run(
+                [blastn, '-db', db, '-query', fasta, \
+                         '-outfmt', \
+                         '6 qseqid sseqid qlen slen evalue qcovs pident mismatch', \
+                         '-max_target_seqs', str(maxhits), '-out', blast_out])
 
     if p.returncode != 0:
         print("blastn could not be executed.  Error encountered.")
         print(p.returncode)
     else:
         print("blastn run successfully.")
-        print("format: query ID, subject ID, query length, subj length, e val, # mismatches")
+        print("format: query ID, subject ID, query length, subj length, e val, query cov/subj, percent identical matches, # mismatches")
         return(blast_out)
 
     # Log errors currently printed to stdout
@@ -149,9 +151,12 @@ def create_connection(db_file):
             conn.close()
         return(db_file)
 
-def get_data(filepath, sep, colnames):
-        return(pd.read_csv(filepath, sep = sep, names = colnames))
+def get_data(filepath, sep, colnames = None):
 
+    if colnames is not None:
+        return(pd.read_csv(filepath, sep = sep, names = colnames))
+    else:
+        return(pd.read_csv(filepath, sep = sep))
 
 def main():
 
@@ -212,7 +217,17 @@ def main():
         g.to_sql('groups', conn, if_exists = 'fail')
     except ValueError:
         print("A table with this name already exists. Using that one.")
-         
+
+    # Actions on the primer file 
+    # NOTE: decide whether to package primer design file with pipeline
+    # NOTE: info from this can be directly used in makeblastdb w/o need to input (or import this)
+    p = get_data('10932_ORP_primer_design_file.txt', '\t')
+    try:
+        p.to_sql('primers', conn, if_exists = 'fail')
+    except ValueError:
+        print("A table with this name already exists. Using that one.")
+    
+     
     ids = n['seq'].tolist()
     select = f"SELECT seq, sample_primer FROM groups WHERE seq IN ({','.join('?' * len(ids))})"
     rows = c.execute(select, ids).fetchall()    
@@ -222,7 +237,7 @@ def main():
     full = full.drop(columns = ['sample_primer']) 
 
     # Get the blast output and compare it to the expected
-    bcolnames = ["seq", "primer", "query_len", "subj_len", "eval", "mismatch"]
+    bcolnames = ["seq", "primer", "query_len", "subj_len", "eval", "cov", "pident", "mismatch"]
     b = get_data(blast_file, '\t', bcolnames)
     
     # Want to add max num hits to the log file but it's initialized inside function
