@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 
-import logging, sys, os, shutil, subprocess, argparse, sqlite3
+import logging, sys, os, shutil, subprocess, argparse
 from pathlib import Path
 import pandas as pd
+import numpy as np
 
 def create_log(filename, filepath = os.getcwd()):
     if filepath == os.getcwd():
@@ -32,7 +33,6 @@ def file_exists(filename):
     Path to file
 
     """
-
     if Path(filename).is_file():
         print(f"{filename} found.")
         return(Path(filename).resolve())
@@ -75,11 +75,9 @@ def make_blast_db(reference, dbtype, makeblastdb):
     ------
 
     """
-    # Would like to add db_prefix = args.outfile so that it's easy to clean up files
+    # Would like to add db_prefix = 'amr2020' so that it's easy to clean up files
     db_name = os.path.splitext(reference)[0]
-
     p = subprocess.run([makeblastdb, '-in', reference, '-out', db_name, '-dbtype', dbtype])
-
     if p.returncode != 0:
         print("makeblastdb could not be executed.  Error encountered.")
         print(p.returncode)
@@ -116,172 +114,219 @@ def run_blast(db, fasta, outfile, blastn, maxhits = 10):
             maxhits = 10
         finally:
             maxhits = maxhits
-
     print(f"Running blast with {maxhits} maximum hits to generate")
     p = subprocess.run(
                 [blastn, '-db', db, '-query', fasta, \
                          '-outfmt', \
                          '6 qseqid sseqid qlen slen evalue qcovs pident mismatch', \
                          '-max_target_seqs', str(maxhits), '-out', blast_out])
-
     if p.returncode != 0:
         print("blastn could not be executed.  Error encountered.")
         print(p.returncode)
     else:
         print("blastn run successfully.")
         print("format: query ID, subject ID, query length, subj length, e val, query cov/subj, percent identical matches, # mismatches")
-        return(blast_out)
+        return(blast_out) 
 
     # Log errors currently printed to stdout
 
-def create_connection(db_file):
-    #if Path(db_file).is_file():
-    #    db_init = db_file + '_sqlDB'
-    #else:
-    #    db_init = db_file
-
-    conn = None
-    try:
-        conn = sqlite3.connect(db_file)
-        print(sqlite3.version)
-    except Error as e:
-        print(e)
-    finally:
-        if conn:
-            conn.close()
-        return(db_file)
-
 def get_data(filepath, sep, colnames = None):
-
     if colnames is not None:
         return(pd.read_csv(filepath, sep = sep, names = colnames))
     else:
         return(pd.read_csv(filepath, sep = sep))
 
-def main():
-
-    parser = argparse.ArgumentParser(description = 'Run Blast on some data.')
-    parser.add_argument('-f', '--query_fasta', metavar = '', required = True, \
-                        help = 'Specify query fasta')
-    parser.add_argument('-r', '--reference_fasta', metavar = '', required = True, \
-                        help = 'Specify data to blast against')
-    parser.add_argument('-g', '--group_file', metavar = '', required = True, \
-                        help = 'Specify name of group file')
-    parser.add_argument('-n', '--name_file', metavar = '', required = True, \
-                         help = 'Specify name of name file')
-    parser.add_argument('-o', '--outfile', metavar = '', required = True, \
-                        help = 'Specify identifying prefix for output files')
-    args = parser.parse_args()
-
-    # Generate log file
-    logger = create_log(args.outfile + ".log")
-
-    # Check for files
-    query_fasta = file_exists(args.query_fasta)
-    reference_fasta = file_exists(args.reference_fasta)
-    group_file = file_exists(args.group_file)
-    name_file = file_exists(args.name_file)
-
-    path_to_makeblastdb = cmd_exists('makeblastdb')
-    path_to_blastn = cmd_exists('blastn')
-
-    print(f"All files exist. All commands are executable.")
-
-    db = make_blast_db(reference_fasta, 'nucl', path_to_makeblastdb)
-    blast_file = run_blast(db, query_fasta, args.outfile, path_to_blastn, 20)
-
-    print("Building database")
-    db_init = create_connection(args.outfile + '.db')
-
-    # Actions on name file (get unique sequences and num of consensus seqs)
-    ncolnames = ["seq", "consensusSeqs"]
-    n = get_data(name_file, '\t', ncolnames)
-    n['nseqs'] = n.consensusSeqs.str.split(',', expand = False).agg(len)
-    n = n.drop(columns = ['consensusSeqs'])
-
-    logger.info(f"[OUT] {len(n.index)} unique sequences remain after QC steps performed.")
-    logger.info(f"[OUT] These consensus sequences comprise {n.nseqs.sum()} total sequences.")
-    logger.info(f"[OUT] The minimum number of identical sequences per consensus sequence is {n.nseqs.min()}")
-    #logger.info(f"""[OUT] The max is {n.nseqs.max()}, the median is {n.nseqs.median()}, 
-    #           and the mean is {n.nseqs.mean()} (stdev {n.nseqs.std()})""")
-
-    logger.info(f"[OUT] Summary statistics on the number of identical sequences per consensus sequence: \n {n.nseqs.describe()}")
-    # Make a plot showing distribution of num_consensus_sequences
-
-    # Actions on group file (get primers for all unique sequences)
-    gcolnames = ["seq", "sample_primer"]
-    g = get_data(group_file, '\t', gcolnames)
-    conn = sqlite3.connect(db_init) 
-    c = conn.cursor()
-    try:
-        g.to_sql('groups', conn, if_exists = 'fail')
-    except ValueError:
-        print("A table with this name already exists. Using that one.")
-
-    # Actions on the primer file 
-    # NOTE: decide whether to package primer design file with pipeline
-    # NOTE: info from this can be directly used in makeblastdb w/o need to input (or import this)
-    p = get_data('10932_ORP_primer_design_file.txt', '\t')
-    try:
-        p.to_sql('primers', conn, if_exists = 'fail')
-    except ValueError:
-        print("A table with this name already exists. Using that one.")
-    
-     
-    ids = n['seq'].tolist()
-    select = f"SELECT seq, sample_primer FROM groups WHERE seq IN ({','.join('?' * len(ids))})"
-    rows = c.execute(select, ids).fetchall()    
-    rows_df = pd.DataFrame(rows, columns = ['seq', 'sample_primer'])
-    full = pd.merge(n, rows_df, on = "seq")
-    full['primer'] = full['sample_primer'].str.split('.').str[1]
-    full = full.drop(columns = ['sample_primer']) 
-
-    # Get the blast output and compare it to the expected
-    bcolnames = ["seq", "primer", "query_len", "subj_len", "eval", "cov", "pident", "mismatch"]
-    b = get_data(blast_file, '\t', bcolnames)
-    
-    # Want to add max num hits to the log file but it's initialized inside function
-    #logger.info("[OUT] Blastn run with max target number of sequences set to {maxhits}.")
-    logger.info(f"[OUT] {len(b.index)} total Blast hits against the high-quality, unique sequences")
-    logger.info(f"[OUT] {b[b.mismatch < 2].shape[0]} total Blast hits with 0 or 1 mismatches.") 
+# Generate log file
+logger = create_log('amr2020.log')
 
 
-    final = pd.merge(full, b, on = ["seq", "primer"], how = "left")
-    nomatch = final[final.isnull().any(axis=1)]
-    hits = pd.merge(full, b, on = ["seq", "primer"], how = "inner")
+# Check for files
+query_fasta = file_exists('twist.final.fasta')
+reference_fasta = file_exists('twist_pc_design_amplicons.fasta') # amr_design_primers.fasta 
+group_file = file_exists('twist.final.groups')
+name_file = file_exists('twist.final.names')
+primer_file = file_exists('enterics.amr.fixed.genotypes_twistAll.txt') # 10932_ORP_19.O1_Design_File_06242019.txt
 
-    logger.info(f"[OUT] There are {len(hits.index)} sequences with a blast hit to the primer from the design file.")
-    logger.info(f"[OUT] Of these, {hits[hits.mismatch < 2].shape[0]} have 0 or 1 mismatches.")
+blast_file = 'amr2020_blast.out'
 
-    hits.to_csv(args.outfile + '_perfect_matches.txt', sep='\t', index = False, float_format = "%.2E")
-    nomatch.to_csv(args.outfile + '_no_perfect_matches.txt', columns = ['seq','nseqs','primer'], sep='\t', index = False)
-    logger.info(f"[OUT] The perfect matches can be found here: {args.outfile}_perfect_matches.txt ")
-    logger.info(f"[OUT] The sequences without a perfect match can be found here: {args.outfile}_no_perfect_matches.txt ")    
-    # Wording of the file name ("no matches") is confusing
-    m = b.seq.isin(hits.seq)
-    m2 = b.loc[m]
-    m3 = b.loc[~m]
-    m2.to_csv(args.outfile + '_all_matches.txt', sep='\t', index = False, float_format = "%.2E")
-    m3.to_csv(args.outfile + '_mismatches.txt', sep='\t', index = False, float_format = "%.2E")
+path_to_makeblastdb = cmd_exists('makeblastdb')
+path_to_blastn = cmd_exists('blastn')
 
-    logger.info("[OUT] The final reads that matched perfectly to their intended primers also matched to other primers in the design file")
-    logger.info(f"[OUT] A list of all such matches can be found here: {args.outfile}_all_matches.txt")
-    logger.info("[OUT] Some reads that did not match their intended primers did match other primers")
-    logger.info(f"[OUT] A list of those can be found here: {args.outfile}_mismatches.txt")
+db = make_blast_db(reference_fasta, 'nucl', path_to_makeblastdb)
+blast_file = run_blast(db, query_fasta, 'amr2020', path_to_blastn, 20)
 
-    n = pd.merge(full, b, on = ["seq"], how = "left")
-    n2 = n[n.isnull().any(axis=1)]
-    
-    n2 = n[n.isnull().any(axis=1)].drop(labels = ['primer_y','query_len','subj_len','eval','mismatch'], \
-           axis = 1).rename(columns ={'primer_x':'primer'})
-    n2.to_csv(args.outfile + '_orphans.txt', columns = ['seq','nseqs','primer'], sep='\t', index = False)
-    logger.info("[OUT] Some reads did not hit any of the amplicons in the design file.")
-    logger.info(f"[OUT] A list of those can be found here: {args.outfile}_orphans.txt")
-    
-    
+# Actions on name file (get unique sequences and num of consensus seqs)
+ncolnames = ["seq", "sameSeqs"]
+n = get_data(name_file, '\t', ncolnames)
+n['nseqs'] = n.sameSeqs.str.split(',', expand = False).agg(len)
+n = n.drop(columns = ['sameSeqs'])
 
-    print("Validation completed.  Please see output and log files for details.")
+logger.info(f"[OUT] {len(n.index):,} unique sequences remain after QC steps performed.")
+logger.info(f"[OUT] These unique sequences comprise {n.nseqs.sum():,} total sequences.")
+logger.info(f"[OUT] The minimum number of identical sequences per unique sequence is {n.nseqs.min()}")
+logger.info(f"""[OUT] The max is {n.nseqs.max():,}, the median is {n.nseqs.median()}, 
+    and the mean is {int(n.nseqs.mean()):,} (stdev {int(n.nseqs.std()):,})""")
 
-if __name__ == "__main__":
-    main()
+# Actions on group file (get primers for all unique sequences)
+gcolnames = ["seq", "sample_primer"]
+g = get_data(group_file, '\t', gcolnames)
 
+# Actions on primer file 
+# (new panel)
+p = get_data(primer_file, '\t')
+p = p.rename(columns = str.lower)
+p['name'] = p['assay_id'] + p['assay_name']
+
+# (old panel)
+pcolnames = ["Group_ID","Gene_Chr","Name","Genome","F-sp","R-sp","Len","GC","Amplicon", \
+            "Chr","From","To","Gene_Name_Original","Gene_Name","Annotations"]
+p = get_data(primer_file, '\t', pcolnames)
+p = p.rename(columns = str.lower)
+
+# Create a dataframe with all seqs that passed QC, the # of consensus seqs, and associated primer 
+full = pd.merge(n, g, on = 'seq', how = 'left')
+full['primer'] = full['sample_primer'].str.split('.').str[1]
+full['sample'] = full['sample_primer'].str.split('.').str[0]
+full = full.drop(columns = ['sample_primer'])
+
+# Get the blast output
+bcolnames = ["seq", "primer", "query_len", "subj_len", "eval", "cov", "pident", "mismatch"]
+b = get_data(blast_file, '\t', bcolnames)
+
+# Merge the blast hits with the full dataset (containing all post-QC seqs)
+final = pd.merge(full, b, on = ['seq', 'primer'], how = 'left') # All post-QC seqs matched to blast hits on exact primer match
+
+# May not need these because the data are mixed between two oligos files
+#hits = pd.merge(full, b, on = ['seq', 'primer'], how = 'inner') # Only the ones that had a blast hit
+#logger.info(f"[OUT] There are {len(hits.index):,} sequences with a blast hit to the primer from the design file.")
+#logger.info(f"[OUT] Of these, {hits[hits.mismatch < 2].shape[0]:,} have 0 or 1 mismatches.")
+
+##########################################
+#####   POSITIVE CONTROLS ANALYSIS  ######
+##########################################
+
+# get only the Twist control samples (containing all post-QC seqs)
+final_twist = final.loc[final['sample'].str.contains('Twist') ]
+
+conditions = [
+    (final_twist.isnull().any(axis=1)), # 0
+    (final_twist['pident'] == 100) & (final_twist['cov'] >= 98), 
+    (final_twist['pident'] < 100) | (final_twist['cov'] < 98)
+]
+
+values = [0,2,1]
+final_twist['match'] = np.select(conditions, values)
+
+logger.info("[OUT] Among the Twist positive control samples,")
+logger.info(f"[OUT] {len(final_twist.index):,} unique sequences remain after QC steps performed.")
+logger.info(f"[OUT] These unique sequences comprise {final_twist.nseqs.sum():,} total sequences.")
+logger.info(f"""[OUT] Some summary stats about the number of identical sequences per unique sequence (i.e. abundance):
+    min = {final_twist.nseqs.min():,}, max = {final_twist.nseqs.max():,}
+    median = {final_twist.nseqs.median():,}, mean = {final_twist.nseqs.mean():,.2f} (std {final_twist.nseqs.std():,.2f})""")
+
+
+logger.info(f"""[OUT] 
+    {final_twist.groupby('match')['nseqs'].sum()[2]:,} total sequences match their expected target with 100% identity and 98% coverage or better.")
+    These comprise {final_twist['match'].value_counts()[2]:,} unique sequences.
+    {final_twist.groupby('match')['nseqs'].sum()[1]:,} total sequences match their expected target with < 100% identity and/or < 98% coverage.
+    These comprise {final_twist['match'].value_counts()[1]:,} unique sequences.
+    {final_twist.groupby('match')['nseqs'].sum()[0]:,} total sequences did not hit their expected target at all.
+    These comprise {final_twist['match'].value_counts()[0]:,} unique sequences.""")
+
+final['match'].value_counts() # unique seqs in each group
+final.groupby('match')['nseqs'].sum() # total seqs in each group
+final.groupby('match')['primer'].nunique() # Not that helpful because of overlap between groups
+
+# if primer has a perfect match, remove it from match=0 
+ids = final_twist.loc[final_twist['match'] == 2, 'primer'].drop_duplicates() # list of ids with perfect match
+index_ids = final_twist[ (final_twist['match'] == 0) & (final_twist['primer'].isin(ids)) ].index
+#final_twist.drop(index_ids, inplace = True)
+newf = final_twist.drop(index_ids)
+
+logger.info(f"""[OUT] 
+    After removing primers that do have a perfect match to their target, there are
+    {newf.groupby('match')['nseqs'].sum()[0]:,} total sequences remain that did not hit their target. 
+    These comprise {newf['match'].value_counts()[0]:,} unique sequences. """)
+
+
+# examine the primers with imperfect hits to their target (match = 1)
+perfect = final_twist.loc[ (final_twist['match'] == 1) & (final_twist['primer'].isin(ids)) & \
+                        (final_twist['pident'] == 100) & (final_twist['cov'] >= 98), 'primer'].drop_duplicates()
+middle = final_twist.loc[ (final_twist['match'] == 1) & (final_twist['primer'].isin(ids)) & \
+                        (final_twist['pident'] > 99) & (final_twist['cov'] >= 98), 'primer'].drop_duplicates()
+low = final_twist.loc[ (final_twist['match'] == 1) & (final_twist['primer'].isin(ids)) & \
+                        (final_twist['pident'] < 100) & (final_twist['cov'] < 98), 'primer'].drop_duplicates()                                             
+logger.info(f"""[OUT]
+    Examining the {final_twist['match'].value_counts()[1]:,} unique sequences that hit their intended target with <100% identity and/or <98% coverage, 
+    {perfect.shape[0]:,} primers had at least 1 match with 100% ID and >= 98% coverage.
+    {middle.shape[0]:,} primers had at least 1 match with >99% ID and >=98% coverage.
+    {low.shape[0]:,} primers had a match with <100% ID and <98% coverage.""")
+
+# 'perfect' is the df we would be looking more closely at. Everything else gets removed. For this data, perfect is empty.
+
+# if primer has a perfect match, remove from match=1 
+index_ids = final_twist[ (final_twist['match'] == 1) & (final_twist['primer'].isin(ids)) ].index
+newf2 = newf.drop(index_ids)
+
+logger.info(f"""[OUT] After removing primer pairs with perfect hits from the rest of the data, there are 
+    {newf2['match'].value_counts()[2]:,} unique sequences that "perfectly" hit their target (abundance = {newf2.groupby('match')['nseqs'].sum()[2]:,})
+    {newf2['match'].value_counts()[1]:,} unique sequences that hit their target with <100% &/or <98% coverage (abundance = {newf2.groupby('match')['nseqs'].sum()[1]:,})
+    {newf2['match'].value_counts()[0]:,} unique sequences that did not hit their intended target (abundance = {newf2.groupby('match')['nseqs'].sum()[0]:,}) """)
+ 
+# Remove any seqs with match = 0 if the primer has an imperfect match
+ids = newf2.loc[(newf2['match'] == 1), 'primer'].drop_duplicates()
+index_ids = newf2[ (newf2['match'] == 0) & (newf2['primer'].isin(ids)) ].index
+newf3 = newf2.drop(index_ids)
+logger.info(f"""[OUT] 
+    After removing {len(index_ids)} primer pairs that imperfectly hit their target from the group that did not hit their target,
+    {newf3.groupby('match')['primer'].nunique()[2]} primers hit their target with 100% identity and >= 98% coverage
+    {newf3.groupby('match')['primer'].nunique()[1]} primers hit their target with <100% and/or <98% coverage
+    {newf3.groupby('match')['primer'].nunique()[0]} primers did not hit their target""")
+
+primers_in_pools = g['sample_primer'].str.split('.').str[1].drop_duplicates()
+
+logger.info(f"[OUT] {len(primers_in_pools)} primers made it past QC filters with at least 10 reads. ")
+logger.info(f"[OUT {newf3['primer'].nunique()} of these primers amplified sequences in the positive control samples.")
+logger.info(f"[OUT] There are {p.shape[0]} total primers on the primer panel used in this assay" )
+
+
+t = primers_in_pools.isin(newf3['primer'].drop_duplicates())
+stray = primers_in_pools[~t] # The 11 primers that passed QC but not in Twist samples
+stray_df = final.loc[(final['primer'].isin(stray))]
+stray_df.to_csv('primers_no_Twist_match.txt',sep='\t', index = False, float_format = "%.2E")
+
+nm = newf3.loc[(newf['match'] == 0)]
+ps = nm['primer'].drop_duplicates()
+newp = p[p.name.isin(ps)]
+newp.to_csv('primers_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
+
+# Find poorly-performing primers
+index_ids = newf[ (newf['pident'] < 90) & (newf['cov'] < 90)].index
+
+bcolnames = ["primer", "gene", "query_len", "subj_len", "eval", "cov", "pident", "mismatch"]
+res = get_data(blast_file, '\t', bcolnames)
+res1 = res.groupby('primer', as_index=False)['pident', 'cov'].max()
+
+# Print that primer-by-match table - aggregating with count
+p_table = final.groupby(['match', 'primer'])
+p_table.agg('count').reset_index()[['match','primer','seq','nseqs']].to_csv('amr2020_primer_table.txt',sep='\t', index = False, float_format = "%.2E")
+
+t = final.groupby(['seq', 'primer'], as_index = False)['pident','cov'].max()
+
+
+
+n2 = n[n.isnull().any(axis=1)].drop(labels = ['primer_y','query_len','subj_len','eval','mismatch'], \
+       axis = 1).rename(columns ={'primer_x':'primer'})
+n2.to_csv('amr2020' + '_orphans.txt', columns = ['seq','nseqs','primer'], sep='\t', index = False)
+logger.info("[OUT] Some reads did not hit any of the amplicons in the design file.")
+logger.info(f"[OUT] A list of those can be found here: {'amr2020'}_orphans.txt")
+
+
+logger.info("Validation completed.")
+
+print("[OUT] Validation completed.  Please see output and log files for details.")
+
+
+##########################################
+#############   AMR ANALYSIS  ############
+##########################################
