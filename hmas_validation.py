@@ -233,9 +233,9 @@ logger.info(f"""[OUT]
     {final_twist.groupby('match')['nseqs'].sum()[0]:,} total sequences did not hit their expected target at all.
     These comprise {final_twist['match'].value_counts()[0]:,} unique sequences.""")
 
-final['match'].value_counts() # unique seqs in each group
-final.groupby('match')['nseqs'].sum() # total seqs in each group
-final.groupby('match')['primer'].nunique() # Not that helpful because of overlap between groups
+final_twist['match'].value_counts() # unique seqs in each group
+final_twist.groupby('match')['nseqs'].sum() # total seqs in each group
+final_twist.groupby('match')['primer'].nunique() # Not that helpful because of overlap between groups
 
 # if primer has a perfect match, remove it from match=0 
 ids = final_twist.loc[final_twist['match'] == 2, 'primer'].drop_duplicates() # list of ids with perfect match
@@ -293,12 +293,159 @@ logger.info(f"[OUT] There are {p.shape[0]} total primers on the primer panel use
 t = primers_in_pools.isin(newf3['primer'].drop_duplicates())
 stray = primers_in_pools[~t] # The 11 primers that passed QC but not in Twist samples
 stray_df = final.loc[(final['primer'].isin(stray))]
-stray_df.to_csv('primers_no_Twist_match.txt',sep='\t', index = False, float_format = "%.2E")
+stray_df.to_csv('primers_Twist_passQC_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
 
 nm = newf3.loc[(newf['match'] == 0)]
 ps = nm['primer'].drop_duplicates()
 newp = p[p.name.isin(ps)]
-newp.to_csv('primers_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
+newp.to_csv('primers_Twist_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
+
+
+##########################################
+#############   AMR ANALYSIS  ############
+##########################################
+
+reference_fasta = file_exists('primer_panel_v1_design_amplicons.fasta') # 823 v2 amr_design_primers.fasta
+db = make_blast_db(reference_fasta, 'nucl', path_to_makeblastdb)
+blast_file = run_blast(db, query_fasta, 'amr2020', path_to_blastn, 20)
+
+# Actions on name file (get unique sequences and num of consensus seqs)
+ncolnames = ["seq", "sameSeqs"]
+n = get_data(name_file, '\t', ncolnames)
+n['nseqs'] = n.sameSeqs.str.split(',', expand = False).agg(len)
+n = n.drop(columns = ['sameSeqs'])
+
+logger.info(f"[OUT] {len(n.index):,} unique sequences remain after QC steps performed.")
+logger.info(f"[OUT] These unique sequences comprise {n.nseqs.sum():,} total sequences.")
+logger.info(f"[OUT] The minimum number of identical sequences per unique sequence is {n.nseqs.min()}")
+logger.info(f"""[OUT] The max is {n.nseqs.max():,}, the median is {n.nseqs.median()}, 
+    and the mean is {int(n.nseqs.mean()):,} (stdev {int(n.nseqs.std()):,})""")
+
+# Actions on group file (get primers for all unique sequences)
+gcolnames = ["seq", "sample_primer"]
+g = get_data(group_file, '\t', gcolnames)
+
+# Actions on primer file (old panel)
+pcolnames = ["Group_ID","Gene_Chr","Name","Genome","F-sp","R-sp","Len","GC","Amplicon", \
+            "Chr","From","To","Gene_Name_Original","Gene_Name","Annotations"]
+p = get_data(primer_file, '\t', pcolnames)
+p = p.rename(columns = str.lower)
+
+# Create a dataframe with all seqs that passed QC, the # of consensus seqs, and associated primer 
+full = pd.merge(n, g, on = 'seq', how = 'left')
+full['primer'] = full['sample_primer'].str.split('.').str[1]
+full['sample'] = full['sample_primer'].str.split('.').str[0]
+full = full.drop(columns = ['sample_primer'])
+
+# Get the blast output
+bcolnames = ["seq", "primer", "query_len", "subj_len", "eval", "cov", "pident", "mismatch"]
+b = get_data(blast_file, '\t', bcolnames)
+
+# Merge the blast hits with the full dataset (containing all post-QC seqs)
+final = pd.merge(full, b, on = ['seq', 'primer'], how = 'left') # All post-QC seqs matched to blast hits on exact primer match
+
+
+
+# get only the Twist control samples (containing all post-QC seqs)
+final_amr = final.loc[~final['sample'].str.contains('Twist') ]
+
+conditions = [
+    (final_amr.isnull().any(axis=1)), # 0
+    (final_amr['pident'] == 100) & (final_amr['cov'] >= 98), 
+    (final_amr['pident'] < 100) | (final_amr['cov'] < 98)
+]
+
+values = [0,2,1]
+final_amr['match'] = np.select(conditions, values)
+
+logger.info("[OUT] Among the AMR samples,")
+logger.info(f"[OUT] {len(final_amr.index):,} unique sequences remain after QC steps performed.")
+logger.info(f"[OUT] These unique sequences comprise {final_amr.nseqs.sum():,} total sequences.")
+logger.info(f"""[OUT] Some summary stats about the number of identical sequences per unique sequence (i.e. abundance):
+    min = {final_amr.nseqs.min():,}, max = {final_amr.nseqs.max():,}
+    median = {final_amr.nseqs.median():,}, mean = {final_amr.nseqs.mean():,.2f} (std {final_amr.nseqs.std():,.2f})""")
+
+
+logger.info(f"""[OUT] 
+    {final_amr.groupby('match')['nseqs'].sum()[2]:,} total sequences match their expected target with 100% identity and 98% coverage or better.")
+    These comprise {final_amr['match'].value_counts()[2]:,} unique sequences.
+    {final_amr.groupby('match')['nseqs'].sum()[1]:,} total sequences match their expected target with < 100% identity and/or < 98% coverage.
+    These comprise {final_amr['match'].value_counts()[1]:,} unique sequences.
+    {final_amr.groupby('match')['nseqs'].sum()[0]:,} total sequences did not hit their expected target at all.
+    These comprise {final_amr['match'].value_counts()[0]:,} unique sequences.""")
+
+final_amr['match'].value_counts() # unique seqs in each group
+final_amr.groupby('match')['nseqs'].sum() # total seqs in each group
+final_amr.groupby('match')['primer'].nunique() # Not that helpful because of overlap between groups
+
+# if primer has a perfect match, remove it from match=0 
+ids = final_amr.loc[final_amr['match'] == 2, 'primer'].drop_duplicates() # list of ids with perfect match
+index_ids = final_amr[ (final_amr['match'] == 0) & (final_amr['primer'].isin(ids)) ].index
+#final_amr.drop(index_ids, inplace = True)
+newf = final_amr.drop(index_ids)
+
+logger.info(f"""[OUT] 
+    After removing primers that do have a perfect match to their target, there are
+    {newf.groupby('match')['nseqs'].sum()[0]:,} total sequences remain that did not hit their target. 
+    These comprise {newf['match'].value_counts()[0]:,} unique sequences. """)
+
+
+# examine the primers with imperfect hits to their target (match = 1)
+perfect = final_amr.loc[ (final_amr['match'] == 1) & (final_amr['primer'].isin(ids)) & \
+                        (final_amr['pident'] == 100) & (final_amr['cov'] >= 98), 'primer'].drop_duplicates()
+middle = final_amr.loc[ (final_amr['match'] == 1) & (final_amr['primer'].isin(ids)) & \
+                        (final_amr['pident'] > 99) & (final_amr['cov'] >= 98), 'primer'].drop_duplicates()
+low = final_amr.loc[ (final_amr['match'] == 1) & (final_amr['primer'].isin(ids)) & \
+                        (final_amr['pident'] < 100) & (final_amr['cov'] < 98), 'primer'].drop_duplicates()                                             
+logger.info(f"""[OUT]
+    Examining the {final_amr['match'].value_counts()[1]:,} unique sequences that hit their intended target with <100% identity and/or <98% coverage, 
+    {perfect.shape[0]:,} primers had at least 1 match with 100% ID and >= 98% coverage.
+    {middle.shape[0]:,} primers had at least 1 match with >99% ID and >=98% coverage.
+    {low.shape[0]:,} primers had a match with <100% ID and <98% coverage.""")
+
+# 'perfect' is the df we would be looking more closely at. Everything else gets removed. For this data, perfect is empty.
+
+# if primer has a perfect match, remove from match=1 
+index_ids = final_amr[ (final_amr['match'] == 1) & (final_amr['primer'].isin(ids)) ].index
+newf2 = newf.drop(index_ids)
+
+logger.info(f"""[OUT] After removing primer pairs with perfect hits from the rest of the data, there are 
+    {newf2['match'].value_counts()[2]:,} unique sequences that "perfectly" hit their target (abundance = {newf2.groupby('match')['nseqs'].sum()[2]:,})
+    {newf2['match'].value_counts()[1]:,} unique sequences that hit their target with <100% &/or <98% coverage (abundance = {newf2.groupby('match')['nseqs'].sum()[1]:,})
+    {newf2['match'].value_counts()[0]:,} unique sequences that did not hit their intended target (abundance = {newf2.groupby('match')['nseqs'].sum()[0]:,}) """)
+ 
+# Remove any seqs with match = 0 if the primer has an imperfect match
+ids = newf2.loc[(newf2['match'] == 1), 'primer'].drop_duplicates()
+index_ids = newf2[ (newf2['match'] == 0) & (newf2['primer'].isin(ids)) ].index
+newf3 = newf2.drop(index_ids)
+logger.info(f"""[OUT] 
+    After removing {len(index_ids)} primer pairs that imperfectly hit their target from the group that did not hit their target,
+    {newf3.groupby('match')['primer'].nunique()[2]} primers hit their target with 100% identity and >= 98% coverage
+    {newf3.groupby('match')['primer'].nunique()[1]} primers hit their target with <100% and/or <98% coverage
+    {newf3.groupby('match')['primer'].nunique()[0]} primers did not hit their target""")
+
+primers_in_pools = g['sample_primer'].str.split('.').str[1].drop_duplicates()
+
+logger.info(f"[OUT] {len(primers_in_pools)} primers made it past QC filters with at least 10 reads. ")
+logger.info(f"[OUT] {newf3['primer'].nunique()} of these primers amplified sequences in the AMR samples.")
+logger.info(f"[OUT] There are {p.shape[0]} total primers on the primer panel used in this assay" )
+
+
+t = primers_in_pools.isin(newf3['primer'].drop_duplicates())
+stray = primers_in_pools[~t] # The 247 primers that passed QC but not in Twist samples
+stray_df = final.loc[(final['primer'].isin(stray))]
+stray_df.to_csv('primers_AMR_passQC_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
+
+nm = newf3.loc[(newf['match'] == 0)]
+ps = nm['primer'].drop_duplicates()
+newp = p[p.name.isin(ps)]
+newp.to_csv('primers_AMR_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
+
+
+
+
+
+
 
 # Find poorly-performing primers
 index_ids = newf[ (newf['pident'] < 90) & (newf['cov'] < 90)].index
@@ -322,11 +469,15 @@ logger.info("[OUT] Some reads did not hit any of the amplicons in the design fil
 logger.info(f"[OUT] A list of those can be found here: {'amr2020'}_orphans.txt")
 
 
+# Map primer names (they need to have the same as the 749 p pairs)
+# Need to get an amr_primer_design file with the same IDs at the 749
+
+
+
+
+
+
+
 logger.info("Validation completed.")
 
 print("[OUT] Validation completed.  Please see output and log files for details.")
-
-
-##########################################
-#############   AMR ANALYSIS  ############
-##########################################
