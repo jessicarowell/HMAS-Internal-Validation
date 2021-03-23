@@ -293,9 +293,12 @@ def main():
     # Merge the blast hits with the full dataset (containing all post-QC seqs)
     final = pd.merge(full, b, on = ['seq', 'primer'], how = 'left') # All post-QC seqs matched to blast hits on exact primer match
 
-    sample_keyword, data_df, data_type
+    # sample_keyword, data_df, data_type
     main_analysis('Twist', final, 'positive controls')
-    main_analysis('AMR', final, 'AMR samples')
+
+    #reference_fasta = file_exists('amr_design_primers.fasta')
+    #primer_file = file_exists('enterics.amr.fixed.genotypes_twistAll.txt') # 10932_ORP_19.O1_Design_File_06242019.txt
+    #main_analysis('AMR', final, 'AMR samples')
 
     logger.info("Validation completed.")
 
