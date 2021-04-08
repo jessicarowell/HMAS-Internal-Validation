@@ -136,7 +136,8 @@ def get_data(filepath, sep, colnames = None):
     else:
         return(pd.read_csv(filepath, sep = sep))
 
-def main_analysis(sample_keyword, data_df, data_type):
+def main_analysis(sample_keyword, data_df, data_type, logger):
+
     # get only the Twist control samples (containing all post-QC seqs)
     final_twist = data_df.loc[data_df['sample'].str.contains(sample_keyword) ]
 
@@ -215,6 +216,7 @@ def main_analysis(sample_keyword, data_df, data_type):
         {newf3.groupby('match')['primer'].nunique()[1]} primers hit their target with <100% and/or <98% coverage
         {newf3.groupby('match')['primer'].nunique()[0]} primers did not hit their target""")
 
+    return(newf3)
     primers_in_pools = g['sample_primer'].str.split('.').str[1].drop_duplicates()
 
     logger.info(f"[OUT] {len(primers_in_pools)} primers made it past QC filters with at least 10 reads. ")
@@ -234,17 +236,26 @@ def main_analysis(sample_keyword, data_df, data_type):
 
 def main():
 
+    parser = argparse.ArgumentParser(description = 'Run HMAS Internal Validation pipeline after the HMAS QC pipeline.')
+    parser.add_argument('-f', '--fasta', metavar = '', required = True, help = 'Specify fasta file output from HMAS QC pipeline (should have "final" in the filename).')
+    parser.add_argument('-g', '--groups', metavar = '', required = True, help = 'Specify group file output from HMAS QC pipeline (should have "final" in the filename).')
+    parser.add_argument('-n', '--names', metavar = '', required = True, help = 'Specify name file output from HMAS QC pipeline (should have "final" in the filename).')
+    parser.add_argument('-r', '--reference', metavar = '', required = True, help = 'Specify fasta file containing the positive control targets.')
+    parser.add_argument('-p', '--primers', metavar = '', required = True, help = 'Specify primer design file.')
+    args = parser.parse_args()
+
+    # primer file: enterics.amr.fixed.genotypes_twistAll.txt (twist pos ctrls) 10932_ORP_19.O1_Design_File_06242019.txt (amr data)
+    # reference file: twist_pc_design_amplicons.fasta (twist pos ctrls) amr_design_primers.fasta (amr data)
+
     # Generate log file
     logger = create_log('amr2020.log')
 
     # Check for files
-    query_fasta = file_exists('twist.final.fasta')
-    reference_fasta = file_exists('twist_pc_design_amplicons.fasta') # amr_design_primers.fasta 
-    group_file = file_exists('twist.final.groups')
-    name_file = file_exists('twist.final.names')
-    primer_file = file_exists('enterics.amr.fixed.genotypes_twistAll.txt') # 10932_ORP_19.O1_Design_File_06242019.txt
-
-    blast_file = 'amr2020_blast.out'
+    query_fasta = file_exists(args.fasta)
+    reference_fasta = file_exists(args.reference)  
+    group_file = file_exists(args.groups)
+    name_file = file_exists(args.names)
+    primer_file = file_exists(args.primers)
 
     path_to_makeblastdb = cmd_exists('makeblastdb')
     path_to_blastn = cmd_exists('blastn')
@@ -268,16 +279,10 @@ def main():
     gcolnames = ["seq", "sample_primer"]
     g = get_data(group_file, '\t', gcolnames)
 
-    # Actions on primer file 
-    # (new panel)
-    p = get_data(primer_file, '\t')
-    p = p.rename(columns = str.lower)
-    p['name'] = p['assay_id'] + p['assay_name']
+    # Actions on primer file  (for new panel)
+    #p['name'] = p['assay_id'] + p['assay_name']
 
-    # (old panel)
-    pcolnames = ["Group_ID","Gene_Chr","Name","Genome","F-sp","R-sp","Len","GC","Amplicon", \
-                "Chr","From","To","Gene_Name_Original","Gene_Name","Annotations"]
-    p = get_data(primer_file, '\t', pcolnames)
+    p = get_data(primer_file, '\t')
     p = p.rename(columns = str.lower)
 
     # Create a dataframe with all seqs that passed QC, the # of consensus seqs, and associated primer 
@@ -294,11 +299,24 @@ def main():
     final = pd.merge(full, b, on = ['seq', 'primer'], how = 'left') # All post-QC seqs matched to blast hits on exact primer match
 
     # sample_keyword, data_df, data_type
-    main_analysis('Twist', final, 'positive controls')
+    newf3 = main_analysis('Twist', final, 'positive controls', logger)
 
-    #reference_fasta = file_exists('amr_design_primers.fasta')
-    #primer_file = file_exists('enterics.amr.fixed.genotypes_twistAll.txt') # 10932_ORP_19.O1_Design_File_06242019.txt
-    #main_analysis('AMR', final, 'AMR samples')
+    primers_in_pools = g['sample_primer'].str.split('.').str[1].drop_duplicates()
+
+    logger.info(f"[OUT] {len(primers_in_pools)} primers made it past QC filters with at least 10 reads. ")
+    logger.info(f"[OUT {newf3['primer'].nunique()} of these primers amplified sequences in the positive control samples.")
+    logger.info(f"[OUT] There are {p.shape[0]} total primers on the primer panel used in this assay" )
+
+    t = primers_in_pools.isin(newf3['primer'].drop_duplicates())
+    stray = primers_in_pools[~t] # The 11 primers that passed QC but not in Twist samples
+    stray_df = final.loc[(final['primer'].isin(stray))]
+    stray_df.to_csv('primers_Twist_passQC_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
+
+    nm = newf3.loc[(newf['match'] == 0)]
+    ps = nm['primer'].drop_duplicates()
+    newp = p[p.name.isin(ps)]
+    newp.to_csv('primers_Twist_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
+
 
     logger.info("Validation completed.")
 
