@@ -4,6 +4,7 @@ import logging, sys, os, shutil, subprocess, argparse
 from pathlib import Path
 import pandas as pd
 import numpy as np
+pd.options.mode.chained_assignment = None  # default='warn'
 
 def create_log(filename, filepath = os.getcwd()):
     if filepath == os.getcwd():
@@ -136,9 +137,10 @@ def get_data(filepath, sep, colnames = None):
     else:
         return(pd.read_csv(filepath, sep = sep))
 
-def main_analysis(sample_keyword, data_df, data_type, logger):
+def main_analysis(sample_keyword, data_df, data_type, primer_df, group_df, logger):
 
     # get only the Twist control samples (containing all post-QC seqs)
+    final = data_df
     final_twist = data_df.loc[data_df['sample'].str.contains(sample_keyword) ]
 
     conditions = [
@@ -216,12 +218,11 @@ def main_analysis(sample_keyword, data_df, data_type, logger):
         {newf3.groupby('match')['primer'].nunique()[1]} primers hit their target with <100% and/or <98% coverage
         {newf3.groupby('match')['primer'].nunique()[0]} primers did not hit their target""")
 
-    return(newf3)
-    primers_in_pools = g['sample_primer'].str.split('.').str[1].drop_duplicates()
+    primers_in_pools = group_df['sample_primer'].str.split('.').str[1].drop_duplicates()
 
     logger.info(f"[OUT] {len(primers_in_pools)} primers made it past QC filters with at least 10 reads. ")
     logger.info(f"[OUT {newf3['primer'].nunique()} of these primers amplified sequences in the positive control samples.")
-    logger.info(f"[OUT] There are {p.shape[0]} total primers on the primer panel used in this assay" )
+    logger.info(f"[OUT] There are {primer_df.shape[0]} total primers on the primer panel used in this assay" )
 
 
     t = primers_in_pools.isin(newf3['primer'].drop_duplicates())
@@ -231,7 +232,7 @@ def main_analysis(sample_keyword, data_df, data_type, logger):
 
     nm = newf3.loc[(newf['match'] == 0)]
     ps = nm['primer'].drop_duplicates()
-    newp = p[p.name.isin(ps)]
+    newp = primer_df[primer_df['name'].isin(ps)]
     newp.to_csv('primers_'+sample_keyword+'_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
 
 def main():
@@ -298,25 +299,8 @@ def main():
     # Merge the blast hits with the full dataset (containing all post-QC seqs)
     final = pd.merge(full, b, on = ['seq', 'primer'], how = 'left') # All post-QC seqs matched to blast hits on exact primer match
 
-    # sample_keyword, data_df, data_type
-    newf3 = main_analysis('Twist', final, 'positive controls', logger)
-
-    primers_in_pools = g['sample_primer'].str.split('.').str[1].drop_duplicates()
-
-    logger.info(f"[OUT] {len(primers_in_pools)} primers made it past QC filters with at least 10 reads. ")
-    logger.info(f"[OUT {newf3['primer'].nunique()} of these primers amplified sequences in the positive control samples.")
-    logger.info(f"[OUT] There are {p.shape[0]} total primers on the primer panel used in this assay" )
-
-    t = primers_in_pools.isin(newf3['primer'].drop_duplicates())
-    stray = primers_in_pools[~t] # The 11 primers that passed QC but not in Twist samples
-    stray_df = final.loc[(final['primer'].isin(stray))]
-    stray_df.to_csv('primers_Twist_passQC_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
-
-    nm = newf3.loc[(newf['match'] == 0)]
-    ps = nm['primer'].drop_duplicates()
-    newp = p[p.name.isin(ps)]
-    newp.to_csv('primers_Twist_nomatch.txt',sep='\t', index = False, float_format = "%.2E")
-
+    # sample_keyword, data_df, data_type, primer file, group file, logger name
+    main_analysis('Twist', final, 'positive controls', p, g, logger)
 
     logger.info("Validation completed.")
 
