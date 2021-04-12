@@ -231,8 +231,9 @@ def main():
 
     parser = argparse.ArgumentParser(description = 'Run HMAS Internal Validation pipeline after the HMAS QC pipeline.')
     parser.add_argument('-f', '--fasta', metavar = '', required = True, help = 'Specify fasta file output from HMAS QC pipeline (should have "final" in the filename).')
-    parser.add_argument('-g', '--groups', metavar = '', required = True, help = 'Specify group file output from HMAS QC pipeline (should have "final" in the filename).')
-    parser.add_argument('-n', '--names', metavar = '', required = True, help = 'Specify name file output from HMAS QC pipeline (should have "final" in the filename).')
+    parser.add_argument('-g', '--group', metavar = '', required = True, help = 'Specify group file output from HMAS QC pipeline (should have "final" in the filename).')
+    #parser.add_argument('-n', '--name', metavar = '', required = True, help = 'Specify name file output from HMAS QC pipeline (should have "final" in the filename).')
+    parser.add_argument('-c', '--count', metavar = '', required = True, help = 'Specify count file output from HMAS QC pipeline (should have "final" in the filename).')
     parser.add_argument('-r', '--reference', metavar = '', required = True, help = 'Specify fasta file containing the positive control targets.')
     parser.add_argument('-p', '--primers', metavar = '', required = True, help = 'Specify primer design file.')
     args = parser.parse_args()
