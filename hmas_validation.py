@@ -150,15 +150,7 @@ def main_analysis(sample_keyword, data_df, data_type, primer_df, group_df, logge
     ]
 
     values = [0,2,1]
-    final_twist['match'] = np.select(conditions, values)
-
-    logger.info(f"[OUT] Among the {data_type} samples,")
-    logger.info(f"[OUT] {len(final_twist.index):,} unique sequences remain after QC steps performed.")
-    logger.info(f"[OUT] These unique sequences comprise {final_twist.nseqs.sum():,} total sequences.")
-    logger.info(f"""[OUT] Some summary stats about the number of identical sequences per unique sequence (i.e. abundance):
-        min = {final_twist.nseqs.min():,}, max = {final_twist.nseqs.max():,}
-        median = {final_twist.nseqs.median():,}, mean = {final_twist.nseqs.mean():,.2f} (std {final_twist.nseqs.std():,.2f})""")
-
+    final_twist['match'] = np.select(conditi
 
     logger.info(f"""[OUT] 
         {final_twist.groupby('match')['nseqs'].sum()[2]:,} total sequences match their expected target with 100% identity and 98% coverage or better.")
@@ -264,17 +256,23 @@ def main():
     db = make_blast_db(reference_fasta, 'nucl', path_to_makeblastdb)
     blast_file = run_blast(db, query_fasta, 'amr2020', path_to_blastn, 20)
 
-    # Actions on name file (get unique sequences and num of consensus seqs)
-    ncolnames = ["seq", "sameSeqs"]
-    n = get_data(name_file, '\t', ncolnames)
-    n['nseqs'] = n.sameSeqs.str.split(',', expand = False).agg(len)
-    n = n.drop(columns = ['sameSeqs'])
+    # Actions on count file
+    c = get_data(count_file, '\t')
+    c = c[['Representative_Sequence','total']]
+    c.columns = ['seq','nseqs']
 
-    logger.info(f"[OUT] {len(n.index):,} unique sequences remain after QC steps performed.")
-    logger.info(f"[OUT] These unique sequences comprise {n.nseqs.sum():,} total sequences.")
-    logger.info(f"[OUT] The minimum number of identical sequences per unique sequence is {n.nseqs.min()}")
-    logger.info(f"""[OUT] The max is {n.nseqs.max():,}, the median is {n.nseqs.median()}, 
-        and the mean is {int(n.nseqs.mean()):,} (stdev {int(n.nseqs.std()):,})""")
+    # Actions on name file (get unique sequences and num of consensus seqs)
+    #ncolnames = ["seq", "sameSeqs"]
+    #n = get_data(name_file, '\t', ncolnames)
+    #n['nseqs'] = n.sameSeqs.str.split(',', expand = False).agg(len)
+    #n = n.drop(columns = ['sameSeqs'])
+
+    # Note that # of unique seqs after QC steps may not be correct?  (Inconsistent with number in fasta file)
+    logger.info(f"[OUT] {len(c.index):,} unique sequences remain after QC steps performed.")
+    logger.info(f"[OUT] These unique sequences comprise {c.nseqs.sum():,} total sequences.")
+    logger.info(f"[OUT] The minimum number of identical sequences per unique sequence is {c.nseqs.min()}")
+    logger.info(f"""[OUT] The max is {c.nseqs.max():,}, the median is {c.nseqs.median()}, 
+        and the mean is {int(c.nseqs.mean()):,} (stdev {int(c.nseqs.std()):,})""")
 
     # Actions on group file (get primers for all unique sequences)
     gcolnames = ["seq", "sample_primer"]
@@ -287,7 +285,7 @@ def main():
     p = p.rename(columns = str.lower)
 
     # Create a dataframe with all seqs that passed QC, the # of consensus seqs, and associated primer 
-    full = pd.merge(n, g, on = 'seq', how = 'left')
+    full = pd.merge(c, g, on = 'seq', how = 'left')
     full['primer'] = full['sample_primer'].str.split('.').str[1]
     full['sample'] = full['sample_primer'].str.split('.').str[0]
     full = full.drop(columns = ['sample_primer'])
